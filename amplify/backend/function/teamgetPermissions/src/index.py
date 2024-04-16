@@ -65,19 +65,12 @@ def getPS(ps):
 
 def handler(event, context):
     permissions = []
-    mgmt_ps = get_mgmt_ps()
-    deployed_in_mgmt = True if ACCOUNT_ID == mgmt_account_id else False
     try:
         p = client.get_paginator('list_permission_sets')
         paginator = p.paginate(InstanceArn=sso_instance['InstanceArn'])
 
         for page in paginator:
-            for permission in page['PermissionSets']:
-                if not deployed_in_mgmt:
-                    if permission not in mgmt_ps:
-                        permissions.append(getPS(permission))
-                else:
-                    permissions.append(getPS(permission))
+            permissions.extend(getPS(permission) for permission in page['PermissionSets'])
         return sorted(permissions, key=itemgetter('Name'))
     except ClientError as e:
         print(e.response['Error']['Message'])
