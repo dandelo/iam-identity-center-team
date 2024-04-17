@@ -2,7 +2,6 @@
 # This AWS Content is provided subject to the terms of the AWS Customer Agreement available at
 # http: // aws.amazon.com/agreement or other written agreement between Customer and either
 # Amazon Web Services, Inc. or Amazon Web Services EMEA SARL or both.
-import json
 import os
 from botocore.exceptions import ClientError
 import boto3
@@ -13,11 +12,14 @@ policy_table_name = os.getenv("POLICY_TABLE_NAME")
 dynamodb = boto3.resource("dynamodb")
 policy_table = dynamodb.Table(policy_table_name)
 
+org_client = boto3.client('organizations')
+accounts_paginator = org_client.get_paginator('list_accounts_for_parent')
+ou_paginator = org_client.get_paginator('list_organizational_units_for_parent')
+
 ACCOUNT_ID = os.environ["ACCOUNT_ID"]
 
 
 def get_mgmt_account_id():
-    org_client = boto3.client("organizations")
     try:
         response = org_client.describe_organization()
         return response["Organization"]["MasterAccountId"]
@@ -78,31 +80,22 @@ def publishPolicy(result):
     return result
 
 
-def list_account_for_ou(ouId):
-    deployed_in_mgmt = True if ACCOUNT_ID == mgmt_account_id else False
-    account = []
-    client = boto3.client("organizations")
+def list_account_for_ou(parent_id):
+    accounts = []
     try:
-        p = client.get_paginator("list_accounts_for_parent")
-        paginator = p.paginate(
-            ParentId=ouId,
-        )
+        for page in accounts_paginator.paginate(ParentId=parent_id):
+            accounts += [{"name": acct["Name"], "id": acct["Id"]} for acct in page['Accounts']]
 
-        for page in paginator:
-            for acct in page["Accounts"]:
-                if not deployed_in_mgmt:
-                    if acct["Id"] != mgmt_account_id:
-                        account.extend([{"name": acct["Name"], "id": acct["Id"]}])
-                else:
-                    account.extend([{"name": acct["Name"], "id": acct["Id"]}])
-        return account
+        for page in ou_paginator.paginate(ParentId=parent_id):
+            for ou in page['OrganizationalUnits']:
+                accounts += list_account_for_ou(ou['Id'])
+        return accounts
     except ClientError as e:
         print(e.response["Error"]["Message"])
 
 
 def get_entitlements(id):
-    response = policy_table.get_item(Key={"id": id})
-    return response
+    return policy_table.get_item(Key={"id": id})
 
 
 def handler(event, context):
@@ -110,7 +103,7 @@ def handler(event, context):
     groupIds = event["groupIds"]
     eligibility = []
     maxDuration = 0
-    
+
     print("Id: ", event["id"])
 
     for id in [userId] + groupIds:
@@ -123,8 +116,7 @@ def handler(event, context):
         duration = entitlement["Item"]["duration"]
         if int(duration) > maxDuration:
             maxDuration = int(duration)
-        policy = {}
-        policy["accounts"] = entitlement["Item"]["accounts"]
+        policy = {"accounts": entitlement["Item"]["accounts"]}
 
         for ou in entitlement["Item"]["ous"]:
             data = list_account_for_ou(ou["id"])

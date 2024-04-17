@@ -21,6 +21,10 @@ approver_table = dynamodb.Table(approver_table_name)
 policy_table = dynamodb.Table(policy_table_name)
 settings_table = dynamodb.Table(settings_table_name)
 
+org_client = boto3.client('organizations')
+accounts_paginator = org_client.get_paginator('list_accounts_for_parent')
+ou_paginator = org_client.get_paginator('list_organizational_units_for_parent')
+
 grant = os.getenv("GRANT_SM")
 revoke = os.getenv("REVOKE_SM")
 reject = os.getenv("REJECT_SM")
@@ -40,20 +44,18 @@ team_config = {
 }
 
 
-
-def list_account_for_ou(ouId):
-    account = []
-    client = boto3.client('organizations')
+def list_account_for_ou(parent_id):
+    accounts = []
     try:
-        p = client.get_paginator('list_accounts_for_parent')
-        paginator = p.paginate(ParentId=ouId,)
+        for page in accounts_paginator.paginate(ParentId=parent_id):
+            accounts += [{"name": acct["Name"], "id": acct["Id"]} for acct in page['Accounts']]
 
-        for page in paginator:
-            for acct in page['Accounts']:
-                account.extend([{"name": acct['Name'], 'id':acct['Id']}])
-        return account
+        for page in ou_paginator.paginate(ParentId=parent_id):
+            for ou in page['OrganizationalUnits']:
+                accounts += list_account_for_ou(ou['Id'])
+        return accounts
     except ClientError as e:
-        print(e.response['Error']['Message'])
+        print(e.response["Error"]["Message"])
 
 
 def get_entitlements(id):
@@ -85,17 +87,15 @@ def getEntitlements(userId, groupIds):
         duration = entitlement['Item']['duration']
         if int(duration) > maxDuration:
             maxDuration = int(duration)
-        policy = {}
-        policy['accounts'] = entitlement['Item']['accounts']
-        
+        policy = {'accounts': entitlement['Item']['accounts']}
         for ou in entitlement["Item"]["ous"]:
             data = list_account_for_ou(ou["id"])
             policy['accounts'].extend(data)
-            
+
         policy['permissions'] = entitlement['Item']['permissions']
         policy['approvalRequired'] = entitlement['Item']['approvalRequired']
         policy['duration'] = str(maxDuration)
-        
+
         eligibility.append(policy)
 
     return eligibility
