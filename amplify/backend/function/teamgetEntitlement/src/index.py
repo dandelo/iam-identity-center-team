@@ -80,7 +80,14 @@ def publishPolicy(result):
     return result
 
 
+root_ou_id = org_client.list_roots()['Roots'][0]['Id']  # Currently only possible to have a sinlge root OU
+
+
 def list_account_for_ou(parent_id):
+    # Shortcut to list all accounts quickly
+    if parent_id == root_ou_id:
+        return list_all_accounts()
+
     accounts = []
     try:
         for page in accounts_paginator.paginate(ParentId=parent_id):
@@ -89,6 +96,17 @@ def list_account_for_ou(parent_id):
         for page in ou_paginator.paginate(ParentId=parent_id):
             for ou in page['OrganizationalUnits']:
                 accounts += list_account_for_ou(ou['Id'])
+        return accounts
+    except ClientError as e:
+        print(e.response["Error"]["Message"])
+
+
+def list_all_accounts():
+    accounts = []
+    paginator = org_client.get_paginator('list_accounts')
+    try:
+        for page in paginator.paginate():
+            accounts += [{"name": acct["Name"], "id": acct["Id"]} for acct in page['Accounts']]
         return accounts
     except ClientError as e:
         print(e.response["Error"]["Message"])
